@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+import os
+import urllib.parse
+import subprocess
+
+import toml
+
+root_dir = os.curdir
+mods_dir = f"{root_dir}/mods"
+
+fixup_count = 0
+
+
+def fixup_alphanumerical(filename: str):
+    rep_dashes = [" ", "[", "]", "(", ")", "+"]
+    for c in rep_dashes:
+        filename = filename.replace(c, "-")
+
+    # replace single quotes
+    filename = filename.replace("'", "")
+
+    # remove instances of more than 1 dash in a row
+    result = []
+    last_char = None
+    fn_len = len(filename)
+    for i, c in enumerate(filename):
+        if c == "-":
+            # no multiple dashes
+            if last_char == "-":
+                continue
+            # no dashes at the start or end
+            if i == 0 or i == fn_len:
+                continue
+
+        result.append(c)
+        last_char = c
+    filename = "".join(result)
+    return filename
+
+for file in os.listdir(mods_dir):
+    if not file.endswith(".toml"):
+        continue
+
+    file_name = f"{mods_dir}/{file}"
+    with open(file_name) as f:
+        mod = toml.load(f)
+    
+    fixed_up = False
+    
+    if "download" in mod and "url" in mod["download"]:
+        parsed = urllib.parse.urlparse(mod["download"]["url"])
+
+        # unquote first, so we don't double-encode
+        path = urllib.parse.unquote(parsed.path)
+        path = urllib.parse.quote(path)
+        parsed = parsed._replace(path=path)
+
+        result = parsed.geturl()
+        if mod["download"]["url"] != result:
+            mod["download"]["url"] = result
+            fixed_up = True
+    
+    # replace non-alphanumerical characters in the filename, too
+    result = fixup_alphanumerical(mod["filename"])
+    if mod["filename"] != result:
+        mod["filename"] = result
+        fixed_up = True
+
+    if fixed_up:
+        with open(file_name, "w") as f:
+            toml.dump(mod, f)
+        fixup_count = fixup_count + 1
+    
+print(f"{fixup_count} files fixed up!")
+subprocess.run(["packwiz", "refresh"])

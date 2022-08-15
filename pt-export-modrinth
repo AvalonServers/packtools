@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+import os
+import argparse
+
+from lib import packlib
+
+parser = argparse.ArgumentParser(description="Tool for uploading packs to Modrinth")
+parser.add_argument("-p", "--pack", default=os.curdir, help="The pack path")
+parser.add_argument("-t", "--token", default=os.environ.get("AVALON_MODRINTH_TOKEN"), help="The token to use to authenticate to Modrinth")
+
+args = parser.parse_args()
+
+pack_path = args.pack
+extra_data = packlib.read_pack_supplementary_data(pack_path)
+uploader = packlib.ModrinthPackUploader(extra_data.slug(), pack_path, args.token)
+uploader.upload()
