@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# manually sync and set a pack live on the server outside of CI
+echo "Reading pack information file"
+sup_contents=$(yj -tj < extra.toml)
+pack_name=$(echo "$sup_contents" | jq -r .name)
+pack_series=$(echo "$sup_contents" | jq -r .series)
+pack_slug="$pack_series-$pack_name"
+pack_subpath="$pack_series/$pack_name"
+
+echo "Uploading pack to CDN"
+pt-export
+
+aws s3 cp \
+    --endpoint-url=https://s3.eu-west-1.wasabisys.com \
+    --profile=wasabi \
+    --acl public-read \
+    "$(pwd)/build/mmc.zip" "s3://parallax-assets/packs/mmc/$pack_slug.zip"
+aws s3 sync \
+    --endpoint-url=https://s3.eu-west-1.wasabisys.com \
+    --profile=wasabi \
+    --exclude "build/*" --delete --acl public-read \
+    "$(pwd)" "s3://parallax-assets/data/$pack_subpath"
+
+echo "Reconfiguring the Minecraft server"
+ssh psn-worker-1 "/var/lib/avalon/mc/tools/scripts/deploy-server.sh"
+
+# read -r -d '' supervisor_config_file <<EOF
+# [program:avalon-$pack_slug]
+# command=/var/lib/avalon/mc/$pack_subpath/start.sh
+# directory=/var/lib/avalon/mc/$pack_subpath
+# user=avalon
+# group=avalon
+# autostart=true
+# autorestart=true
+# stopasgroup=true
+# stopsignal=QUIT
+# EOF
+
+# ssh psn-worker-1 <<EOF
+# #echo "$supervisor_config_file" | sudo tee /etc/supervisor/conf.d/avalon-$pack_slug.conf >/dev/null
+
+# echo "Stopping the Minecraft server"
+# sudo supervisorctl stop "avalon-$pack_slug"
+
+# #echo "Creating a world backup"
+# #sudo -i -u avalon bash -c 'cd /var/lib/avalon/mc/$pack_subpath && mkdir -p backups/pre-update && zip -r backups/pre-update/world-$(date +%Y-%m-%d_%H-%M-%S).zip world'
+
+# echo "Installing the modpack"
+# sudo mkdir -p "/var/lib/avalon/mc/$pack_subpath"
+# sudo chmod -R 0770 /var/lib/avalon/mc/$pack_subpath
+# sudo chown -R avalon:avalon /var/lib/avalon/mc/$pack_subpath
+# sudo -i -u avalon bash -c 'cd /var/lib/avalon/mc/$pack_subpath && java -Xmx4G -jar /var/lib/avalon/mc/packwiz-installer-bootstrap.jar -g -s server https://s3.eu-west-1.wasabisys.com/parallax-assets/data/$pack_subpath/pack.toml'
+# sudo -i -u avalon bash -c 'cd /var/lib/avalon/mc/$pack_subpath && chmod +x ./start.sh'
+
+# echo "Starting the server"
+# sudo supervisorctl start "avalon-$pack_slug"
+
+# echo "Operation completed"
+# EOF

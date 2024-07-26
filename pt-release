@@ -56,12 +56,12 @@ with open(f"{pack_path}/config/bcc.json", "w") as f:
 print("refreshing pack hashes")
 subprocess.run(["packwiz", "refresh"])
 
-print("creating release commit")
-subprocess.run(["git", "add", "-A"])
-subprocess.run([
-    "git", "-c", "commit.gpgsign=false",
-    "commit", "-m", f"Automated release commit for {version}"
-])
+# print("creating release commit")
+# subprocess.run(["git", "add", "-A"])
+# subprocess.run([
+#     "git", "-c", "commit.gpgsign=false",
+#     "commit", "-m", f"Automated release commit for {version}"
+# ])
 
-print("tagging release commit hash")
-subprocess.run(["git", "tag", f"v{str(version)}"])
+# print("tagging release commit hash")
+# subprocess.run(["git", "tag", f"v{str(version)}"])

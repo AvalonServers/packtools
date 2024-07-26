@@ -53,6 +53,7 @@ pack_path = args.pack
 extra_data = packlib.read_pack_supplementary_data(pack_path)
 
 mmc_pack_name = f"packwiz-test-{extra_data.slug()}"
+print(mmc_pack_name)
 mmc_path = appdirs.user_data_dir("PrismLauncher")
 if not os.path.exists(mmc_path):
     write_error("PolyMC data folder not found. Do you have PolyMC installed?")
@@ -62,7 +63,7 @@ if not os.path.exists(mmc_path):
 instance_path = f"{mmc_path}/instances/{mmc_pack_name}"
 
 endpoint = f"http://127.0.0.1:8080/pack.toml"
-writer = packlib.MMCPackWriter(mmc_pack_name, pack_path, endpoint_override=endpoint)
+writer = packlib.MMCPackWriter(mmc_pack_name, pack_path, endpoint_override=endpoint, is_unix_development=True)
 writer._pack["name"] = writer._pack["name"]
 
 # update the multimc groups
@@ -87,8 +88,9 @@ with tempfile.TemporaryDirectory() as tmpdir:
 print("starting packwiz server...")
 server = subprocess.Popen(["packwiz", "serve"], cwd=pack_path, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-print("starting polymc...")
-client = subprocess.Popen(["open", "-W", "-n", "-a", "/Applications/Prism Launcher.app", "--args", "-l", mmc_pack_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# print("starting polymc...")
+# # client = subprocess.Popen(["open", "-W", "-n", "-a", "/Applications/Prism Launcher.app", "--args", "-l", mmc_pack_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# client = subprocess.Popen(["sandbox-exec", "-f", f"{dir_path}/data/prism-sandbox.sb", "/Applications/Prism Launcher.app/Contents/MacOS/prismlauncher"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 server.wait()
-client.wait()
+# client.wait()

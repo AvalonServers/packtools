@@ -8,9 +8,10 @@ import urllib.parse
 import urllib.request
 import subprocess
 import shutil
+import pathlib
 from typing import Any
 
-DOWNLOAD_ENDPOINT = "https://s3.eu-west-1.wasabisys.com/avalon-assets/data"
+DOWNLOAD_ENDPOINT = "https://s3.eu-west-1.wasabisys.com/parallax-assets/data"
 INSTALLER_BOOTSTRAPPER_ENDPOINT = "https://github.com/packwiz/packwiz-installer-bootstrap/releases/latest/download/packwiz-installer-bootstrap.jar"
 
 
@@ -18,6 +19,7 @@ class PackSupplementaryData:
     def __init__(self, data):
         self.series = data["series"]
         self.name = data["name"]
+        self.servers = data["servers"]
     
     def slug(self) -> str:
         return f"{self.series}-{self.name}"
@@ -202,12 +204,14 @@ class MMCPackWriter:
         slug: str,
         pack_root: str,
         endpoint_override: str = None,
+        is_unix_development: bool = False,
     ):
         if not os.path.isdir(pack_root):
             raise Exception("The specified pack does not exist")
 
         self._slug = slug
         self._pack_root = pack_root
+        self._is_unix_development = is_unix_development
 
         if endpoint_override is not None:
             self._pack_meta_url = endpoint_override
@@ -259,10 +263,14 @@ class MMCPackWriter:
             json.dump(result, f, indent=4)
 
     def _write_instance_cfg_ini(self, output: str, config: dict):
+        prelaunch_command = f'"$INST_JAVA" -jar packwiz-installer-bootstrap.jar {self._pack_meta_url}'
+        if self._is_unix_development:
+            prelaunch_command = f'bash ./developer-prelaunch.sh {self._pack_meta_url}'
+
         attributes = {
             "InstanceType": "OneSix",
             "OverrideCommands": True,
-            "PreLaunchCommand": f'"$INST_JAVA" -jar packwiz-installer-bootstrap.jar {self._pack_meta_url}',
+            "PreLaunchCommand": prelaunch_command,
             "name": self._pack["name"],
         }
 
@@ -289,13 +297,22 @@ class MMCPackWriter:
         self._write_mmc_pack_json(f"{output}/mmc-pack.json")
         self._write_instance_cfg_ini(f"{output}/instance.cfg", config)
 
+        data_dir = pathlib.Path(__file__).parent.resolve().parent.joinpath("data")
+        def copy_data_file(file: str):
+            shutil.copyfile(f"{data_dir}/{file}", f"{output}/.minecraft/{file}")
+
         # copy the icon
         icon_path = f"{self._pack_root}/icon.png"
         if os.path.exists(icon_path):
             shutil.copyfile(icon_path, f"{output}/{self._slug}.png")
-
+        
         # create minecraft dir
         os.mkdir(f"{output}/.minecraft")
+        
+        # copy developer utilities
+        if self._is_unix_development:
+            copy_data_file("developer-prelaunch.sh")
+            copy_data_file("fractioniser-scanner.jar")
 
         # download the launcher boot strapper
         urllib.request.urlretrieve(

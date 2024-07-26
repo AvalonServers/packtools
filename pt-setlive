@@ -1,58 +1,83 @@
-#!/usr/bin/env bash
-# manually sync and set a pack live on the server outside of CI
-echo "Reading pack information file"
-sup_contents=$(yj -tj < extra.toml)
-pack_name=$(echo "$sup_contents" | jq -r .name)
-pack_series=$(echo "$sup_contents" | jq -r .series)
-pack_slug="$pack_series-$pack_name"
-pack_subpath="$pack_series/$pack_name"
+#!/usr/bin/env python3
+import os
+import argparse
+import tempfile
+import shutil
+import subprocess
+import pathlib
 
-echo "Uploading pack to CDN"
-pt-export
+from lib import packlib
 
-aws s3 cp \
-    --endpoint-url=https://s3.eu-west-1.wasabisys.com \
-    --profile=wasabi_arctarus_avalon \
-    --acl public-read \
-    "$(pwd)/build/mmc.zip" "s3://avalon-assets/packs/mmc/$pack_slug.zip"
-aws s3 sync \
-    --endpoint-url=https://s3.eu-west-1.wasabisys.com \
-    --profile=wasabi_arctarus_avalon \
-    --exclude "build/*" --delete --acl public-read \
-    "$(pwd)" "s3://avalon-assets/data/$pack_subpath"
+CDN_ENDPOINT='https://s3.eu-west-1.wasabisys.com'
+CDN_PROFILE='wasabi'
+CDN_BUCKET='parallax-assets'
+SERVER_TARGET='psn-worker-1'
 
-echo "Reconfiguring the Minecraft server"
+def upload_cdn(pack, pack_dir, build_path):
+  subprocess.run([
+    'aws', 's3', 'cp',
+    '--endpoint-url', CDN_ENDPOINT,
+    '--profile', CDN_PROFILE,
+    '--acl', 'public-read',
+    os.path.join(build_path, 'mmc.zip'),
+    f's3://{CDN_BUCKET}/packs/mmc/{pack.slug()}.zip'
+  ])
 
-read -r -d '' supervisor_config_file <<EOF
-[program:avalon-$pack_slug]
-command=/var/lib/avalon/mc/$pack_subpath/start.sh
-directory=/var/lib/avalon/mc/$pack_subpath
-user=avalon
-group=avalon
-autostart=true
-autorestart=true
-stopasgroup=true
-stopsignal=QUIT
-EOF
+  subprocess.run([
+    'aws', 's3', 'sync',
+    '--endpoint-url', CDN_ENDPOINT,
+    '--profile', CDN_PROFILE,
+    '--exclude', 'build/*',
+    '--delete',
+    '--acl', 'public-read',
+    pack_dir,
+    f's3://{CDN_BUCKET}/data/{pack.series}/{pack.name}'
+  ])
 
-ssh psn-worker-1.home.alex0.net <<EOF
-echo "$supervisor_config_file" | sudo tee /etc/supervisor/conf.d/avalon-$pack_slug.conf >/dev/null
+def sync_toolchain():
+  packtools = pathlib.Path(__file__).parent.resolve()
+  subprocess.run([
+    'rsync', '-avh', f'{packtools}/', '--exclude', '.venv', '--exclude', '.git', '--rsync-path', 'sudo -i -u avalon rsync', f'{SERVER_TARGET}:/var/lib/avalon/mc/tools/', '--delete'
+  ])
+  subprocess.run([
+    'ssh', SERVER_TARGET, 'sudo chown -R avalon:avalon /var/lib/avalon/mc/tools && sudo chmod -R u+rwx,g+rwx /var/lib/avalon/mc/tools'
+  ])
 
-echo "Stopping the Minecraft server"
-sudo supervisorctl stop "avalon-$pack_slug"
+def set_live(path, pack, servers):
+  # write the pack output
+  print("exporting pack")
+  writer = packlib.MMCPackWriter(pack.slug(), path)
+  pack_output_path = os.path.join(path, 'build')
+  with tempfile.TemporaryDirectory() as tmpdir:
+    writer.write(tmpdir)
+    os.makedirs(pack_output_path, exist_ok=True)
+    shutil.make_archive(f"{pack_output_path}/mmc", "zip", tmpdir)
 
-#echo "Creating a world backup"
-#sudo -i -u avalon bash -c 'cd /var/lib/avalon/mc/$pack_subpath && mkdir -p backups/pre-update && zip -r backups/pre-update/world-$(date +%Y-%m-%d_%H-%M-%S).zip world'
+  print("uploading pack to CDN")
+  upload_cdn(pack, path, pack_output_path)
 
-echo "Installing the modpack"
-sudo mkdir -p "/var/lib/avalon/mc/$pack_subpath"
-sudo chmod -R 0770 /var/lib/avalon/mc/$pack_subpath
-sudo chown -R avalon:avalon /var/lib/avalon/mc/$pack_subpath
-sudo -i -u avalon bash -c 'cd /var/lib/avalon/mc/$pack_subpath && java -Xmx4G -jar /var/lib/avalon/mc/packwiz-installer-bootstrap.jar -g -s server https://s3.eu-west-1.wasabisys.com/avalon-assets/data/$pack_subpath/pack.toml'
-sudo -i -u avalon bash -c 'cd /var/lib/avalon/mc/$pack_subpath && chmod +x ./start.sh'
+  print("syncing toolchain with server")
+  sync_toolchain()
 
-echo "Starting the server"
-sudo supervisorctl start "avalon-$pack_slug"
+  for i, server in enumerate(servers):
+    server_data = servers[server]
+    print(f"deploying instance {i+1} of {len(servers)}: {server}")
+    subprocess.run(['ssh', SERVER_TARGET, f'sudo -i -u avalon /var/lib/avalon/mc/tools/scripts/deploy-server.sh {pack.name} {pack.series}/{pack.name} {server}'])
 
-echo "Operation completed"
-EOF
+parser = argparse.ArgumentParser(description="Tool for setting live modpack changes")
+parser.add_argument('-p', '--pack', type=str, default=os.curdir, help="The pack path")
+parser.add_argument('-s', '--servers', type=str, default=None, help="The server to deploy to, or all to deploy to all servers. Defaults to none")
+
+args = parser.parse_args()
+pack_path = args.pack
+extra_data = packlib.read_pack_supplementary_data(pack_path)
+
+servers = []
+if args.servers != None:
+  server_keys = args.servers.split(',')
+  if 'all' in server_keys:
+    servers = extra_data.servers
+  else:
+    servers = {key: extra_data.servers[key] for key in server_keys}
+
+set_live(pack_path, extra_data, servers)
